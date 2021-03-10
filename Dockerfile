@@ -42,6 +42,7 @@ RUN yarn
 COPY . .
 
 # build the app
+RUN chmod 777 *
 RUN chmod +x bin/build.sh
 RUN INTERACTIVE=false bin/build
 
