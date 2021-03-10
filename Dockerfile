@@ -42,6 +42,7 @@ RUN yarn
 COPY . .
 
 # build the app
+RUN chmod +x bin/build.sh
 RUN INTERACTIVE=false bin/build
 
 # import AWS RDS cert into /etc/ssl/certs/java/cacerts
