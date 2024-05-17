@@ -839,9 +839,9 @@
                          ;; we don't need a description for made_public_by_id because whenever this field changes
                          ;; public_uuid will change and we have a description for it.
                          :made_public_by_id
-                         ;; similarly, we don't need a description for `trashed_from_collection_id` because whenever
+                         ;; similarly, we don't need a description for `trashed_directly` because whenever
                          ;; this field changes `archived` will also change and we have a description for that.
-                         :trashed_from_collection_id} col)
+                         :trashed_directly} col)
               (testing (format "we should have a revision description for %s" col)
                 (is (some? (u/build-sentence
                             (revision/diff-strings
