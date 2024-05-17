@@ -109,30 +109,17 @@
 
 (mu/defn add-collection-join-and-where-clauses
   "Add a `WHERE` clause to the query to only return Collections the Current User has access to; join against Collection
-  so we can return its `:name`.
-
-  A brief note here on `collection-join-id` and `collection-permission-id`. What the heck do these represent?
-
-  Permissions on Trashed items work differently than normal permissions. If something is in the trash, you can only
-  see it if you have the relevant permissions on the *original* collection the item was trashed from. This is set as
-  `trashed_from_collection_id`.
-
-  However, the item is actually *in* the Trash, and we want to show that to the frontend. Therefore, we need two
-  different collection IDs. One, the ID we should be checking permissions on, and two, the ID we should be joining to
-  Collections on."
+  so we can return its `:name`."
   [honeysql-query                                :- ms/Map
    model                                         :- :string
    {:keys [current-user-perms
            filter-items-in-personal-collection]} :- SearchContext]
   (let [visible-collections      (collection/permissions-set->visible-collection-ids current-user-perms)
-        collection-join-id       (if (= model "collection")
-                                   :collection.id
-                                   :collection_id)
-        collection-permission-id (if (= model "collection")
-                                   :collection.id
-                                   (mi/parent-collection-id-column-for-perms (:db-model (search.config/model-to-db-model model))))
+        collection-id-col        (if (= model "collection")
+                                  :collection.id
+                                  :collection_id)
         collection-filter-clause (collection/visible-collection-ids->honeysql-filter-clause
-                                  collection-permission-id
+                                  collection-id-col
                                   visible-collections)]
     (cond-> honeysql-query
       true
@@ -140,7 +127,7 @@
       ;; add a JOIN against Collection *unless* the source table is already Collection
       (not= model "collection")
       (sql.helpers/left-join [:collection :collection]
-                             [:= collection-join-id :collection.id])
+                             [:= collection-id-col :collection.id])
 
       (some? filter-items-in-personal-collection)
       (sql.helpers/where
@@ -161,7 +148,7 @@
                 [:and [:= :collection.personal_owner_id nil]]
                 (for [id (t2/select-pks-set :model/Collection :personal_owner_id [:not= nil])]
                   [:not-like :collection.location (format "/%d/%%" id)]))
-               [:= collection-join-id nil]))))))
+               [:= collection-id-col nil]))))))
 
 (mu/defn ^:private add-table-db-id-clause
   "Add a WHERE clause to only return tables with the given DB id.
@@ -308,16 +295,14 @@
             (or (contains? current-user-perms "/collection/root/")
                 (contains? current-user-perms "/collection/root/read/"))
 
-            collection-id [:coalesce :model.trashed_from_collection_id :collection_id]
-
             collection-perm-clause
             [:or
-             (when has-root-access? [:= collection-id nil])
+             (when has-root-access? [:= :collection_id nil])
              [:and
-              [:not= collection-id nil]
+              [:not= :collection_id nil]
               [:or
-               (has-perm-clause "/collection/" collection-id "/")
-               (has-perm-clause "/collection/" collection-id "/read/")]]]]
+               (has-perm-clause "/collection/" :collection_id "/")
+               (has-perm-clause "/collection/" :collection_id "/read/")]]]]
         (sql.helpers/where
          query
          collection-perm-clause)))))
@@ -513,6 +498,16 @@
     (assoc row :can_write (mi/can-write? row))
     row))
 
+(defn- maybe-modify-collection-id [rows]
+  (for [row rows]
+    (let [trash (collection/trash-collection)]
+      (cond-> row
+        (:trashed_directly row) (assoc :collection_id (:id trash)
+                                       :collection_type (:type trash)
+                                       :collection_authority_level (:authority_level trash)
+                                       :collection_name (:name trash))
+        true (dissoc :trashed_directly)))))
+
 (mu/defn ^:private search
   "Builds a search query that includes all the searchable entities and runs it"
   [search-ctx :- SearchContext]
@@ -548,6 +543,7 @@
                             (filter #(pos? (:score %))))
         total-results       (cond->> (scoring/top-results reducible-results search.config/max-filtered-results xf)
                               true hydrate-user-metadata
+                              true maybe-modify-collection-id
                               (:model-ancestors? search-ctx) (add-dataset-collection-hierarchy)
                               true (map scoring/serialize))
         add-perms-for-col  (fn [item]
