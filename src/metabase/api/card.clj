@@ -192,6 +192,10 @@
         (cond->                                             ; card
           (card/model? card) (t2/hydrate :persisted)))))
 
+(defn- fix-collection-id [card]
+  (cond-> card
+    (:trashed_directly card) (assoc :collection_id (collection/trash-collection-id))))
+
 (api/defendpoint GET "/:id"
   "Get `Card` with ID."
   [id ignore_view]
@@ -199,10 +203,12 @@
    ignore_view [:maybe :boolean]}
   (let [raw-card (t2/select-one Card :id id)
         card (-> raw-card
+                 fix-collection-id
                  api/read-check
                  hydrate-card-details
                  ;; Cal 2023-11-27: why is last-edit-info hydrated differently for GET vs PUT and POST
                  (last-edit/with-last-edit-info :card)
+
                  collection.root/hydrate-root-collection)]
     (u/prog1 card
       (when-not ignore_view
