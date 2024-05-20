@@ -498,15 +498,14 @@
     (assoc row :can_write (mi/can-write? row))
     row))
 
-(defn- maybe-modify-collection-id [rows]
-  (for [row rows]
-    (let [trash (collection/trash-collection)]
-      (cond-> row
-        (:trashed_directly row) (assoc :collection_id (:id trash)
-                                       :collection_type (:type trash)
-                                       :collection_authority_level (:authority_level trash)
-                                       :collection_name (:name trash))
-        true (dissoc :trashed_directly)))))
+(defn- maybe-modify-collection-id [row]
+  (let [trash (collection/trash-collection)]
+    (cond-> row
+      (:trashed_directly row) (assoc :collection_id (:id trash)
+                                     :collection_type (:type trash)
+                                     :collection_authority_level (:authority_level trash)
+                                     :collection_name (:name trash))
+      true (dissoc :trashed_directly))))
 
 (mu/defn ^:private search
   "Builds a search query that includes all the searchable entities and runs it"
@@ -532,18 +531,19 @@
                             (filter (partial check-permissions-for-model (:archived? search-ctx)))
                             ;; MySQL returns `:bookmark` and `:archived` as `1` or `0` so convert those to boolean as
                             ;; needed
+                            (map #(update % :trashed_directly api/bit->boolean))
                             (map #(update % :bookmark api/bit->boolean))
 
                             (map #(update % :archived api/bit->boolean))
 
                             (map #(update % :pk_ref json/parse-string))
+                            (map maybe-modify-collection-id)
                             (map add-can-write)
                             (map (partial scoring/score-and-result (:search-string search-ctx)))
 
                             (filter #(pos? (:score %))))
         total-results       (cond->> (scoring/top-results reducible-results search.config/max-filtered-results xf)
                               true hydrate-user-metadata
-                              true maybe-modify-collection-id
                               (:model-ancestors? search-ctx) (add-dataset-collection-hierarchy)
                               true (map scoring/serialize))
         add-perms-for-col  (fn [item]
