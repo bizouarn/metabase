@@ -419,7 +419,9 @@
                     (collection/permissions-set->visible-collection-ids @api/*current-user-permissions-set*))
                    (if (collection/is-trash? collection)
                      [:= :c.trashed_directly true]
-                     [:= :collection_id (:id collection)])
+                     [:and
+                      [:= :collection_id (:id collection)]
+                      [:= :c.trashed_directly false]])
                    [:= :archived (boolean archived?)]
                    [:= :c.type (h2x/literal (if dataset? "model" "question"))]]}
       (cond-> dataset?
@@ -552,26 +554,30 @@
 
 (defn- collection-query
   [collection {:keys [archived? collection-namespace pinned-state]}]
-  (-> (assoc (collection/effective-children-query
-              collection
-              (if archived?
-                [:or [:= :archived true] [:= :id (collection/trash-collection-id)]]
-                [:and [:= :archived false] [:not= :id (collection/trash-collection-id)]])
-              (perms/audit-namespace-clause :namespace (u/qualified-name collection-namespace))
-              (snippets-collection-filter-clause))
-             ;; We get from the effective-children-query a normal set of columns selected:
-             ;; want to make it fit the others to make UNION ALL work
-             :select [:id
-                      [:id :collection_id]
-                      :archived
-                      :name
-                      :description
-                      :entity_id
-                      :personal_owner_id
-                      :location
-                      [:type :collection_type]
-                      [(h2x/literal "collection") :model]
-                      :authority_level])
+  (-> (assoc
+       (collection/effective-children-query
+        collection
+        (if archived?
+          [:or
+           [:= :archived true]
+           [:= :id (collection/trash-collection-id)]]
+          [:and [:= :archived false] [:not= :id (collection/trash-collection-id)]])
+        (perms/audit-namespace-clause :namespace (u/qualified-name collection-namespace))
+        (snippets-collection-filter-clause))
+       ;; We get from the effective-children-query a normal set of columns selected:
+       ;; want to make it fit the others to make UNION ALL work
+       :select [:id
+                [:id :collection_id]
+                :archived
+                :name
+                :description
+                :entity_id
+                :personal_owner_id
+                :location
+                :trashed_directly
+                [:type :collection_type]
+                [(h2x/literal "collection") :model]
+                :authority_level])
       ;; the nil indicates that collections are never pinned.
       (sql.helpers/where (pinned-state->clause pinned-state nil))))
 
@@ -595,18 +601,20 @@
                   (update acc (if (= (keyword card-type) :model) :dataset :card) conj collection-id))
                 {:dataset #{}
                  :card    #{}}
-                (t2/reducible-query {:select-distinct [:collection_id :type]
-                                     :from            [:report_card]
-                                     :where           [:and
-                                                       [:= :archived false]
-                                                       [:in :collection_id descendant-collection-ids]]}))
+                (when (seq descendant-collection-ids)
+                  (t2/reducible-query {:select-distinct [:collection_id :type]
+                                       :from            [:report_card]
+                                       :where           [:and
+                                                         [:= :archived false]
+                                                         [:in :collection_id descendant-collection-ids]]})))
 
         collections-containing-dashboards
-        (->> (t2/query {:select-distinct [:collection_id]
-                        :from :report_dashboard
-                        :where [:and
-                                [:= :archived false]
-                                [:in :collection_id descendant-collection-ids]]})
+        (->> (when (seq descendant-collection-ids)
+               (t2/query {:select-distinct [:collection_id]
+                          :from :report_dashboard
+                          :where [:and
+                                  [:= :archived false]
+                                  [:in :collection_id descendant-collection-ids]]}))
              (map :collection_id)
              (into #{}))
 
